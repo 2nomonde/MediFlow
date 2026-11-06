@@ -1,0 +1,407 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  RECEPTIONIST
+  NURSE
+  DOCTOR
+  PHARMACIST
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNSPECIFIED
+}
+
+enum VulnerabilityCategory {
+  NONE
+  ELDERLY
+  PREGNANT
+  CHILD
+  CHRONIC_CONDITION
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CANCELLED
+  NO_SHOW
+  COMPLETED
+}
+
+enum QueueStatus {
+  WAITING
+  CALLED
+  IN_CONSULTATION
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum TriagePriority {
+  EMERGENCY
+  URGENT
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum PrescriptionStatus {
+  PENDING
+  DISPENSED
+  CANCELLED
+}
+
+enum AuditAction {
+  CHECK_IN
+  TRIAGE_RECORDED
+  TRIAGE_UPDATED
+  PRIORITY_RECALCULATED
+  PRIORITY_OVERRIDE
+  PATIENT_CALLED
+  CONSULTATION_STARTED
+  CONSULTATION_COMPLETED
+  QUEUE_CANCELLED
+  NO_SHOW_MARKED
+  PRESCRIPTION_CREATED
+  PRESCRIPTION_DISPENSED
+  USER_LOGIN
+  CONFIG_UPDATED
+  APPOINTMENT_CREATED
+  APPOINTMENT_RESCHEDULED
+  APPOINTMENT_CANCELLED
+}
+
+// ---------------------------------------------------------------------------
+// CORE MODELS
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  departmentId String?
+  department   Department? @relation("DepartmentStaff", fields: [departmentId], references: [id])
+
+  appointmentsAsDoctor    Appointment[]           @relation("AppointmentDoctor")
+  queueEntriesAsDoctor    QueueEntry[]            @relation("QueueAssignedDoctor")
+  triagesRecorded         Triage[]                @relation("TriageRecordedBy")
+  consultationsAsDoctor   Consultation[]          @relation("ConsultationDoctor")
+  prescriptionsDispensed  Prescription[]          @relation("PrescriptionDispensedBy")
+  auditLogs               AuditLog[]              @relation("AuditUser")
+  priorityConfigsUpdated  PriorityConfig[]        @relation("ConfigUpdatedBy")
+  priorityOverridesGiven  QueueEntry[]            @relation("PriorityOverriddenBy")
+  serviceStatsAsDoctor    DepartmentServiceStat[] @relation("ServiceStatDoctor")
+
+  @@index([role])
+  @@index([departmentId])
+}
+
+model Department {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  staff        User[]                  @relation("DepartmentStaff")
+  appointments Appointment[]
+  queueEntries QueueEntry[]
+  serviceStats DepartmentServiceStat[]
+
+  @@index([name])
+}
+
+model Patient {
+  id                    String                @id @default(uuid())
+  patientNumber         String                @unique
+  firstName             String
+  lastName              String
+  dateOfBirth           DateTime
+  gender                Gender
+  idOrPassportNumber    String?               @unique
+  phone                 String?
+  email                 String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  vulnerabilityCategory VulnerabilityCategory @default(NONE)
+  allergies             String?
+  chronicConditions     String?
+  registrationDate      DateTime              @default(now())
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  appointments  Appointment[]
+  queueEntries  QueueEntry[]
+  consultations Consultation[]
+
+  @@index([lastName, firstName])
+  @@index([dateOfBirth])
+}
+
+model Appointment {
+  id           String            @id @default(uuid())
+  patientId    String
+  patient      Patient           @relation(fields: [patientId], references: [id])
+  departmentId String
+  department   Department        @relation(fields: [departmentId], references: [id])
+  doctorId     String
+  doctor       User              @relation("AppointmentDoctor", fields: [doctorId], references: [id])
+  scheduledAt  DateTime
+  reason       String?
+  status       AppointmentStatus @default(SCHEDULED)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  queueEntry QueueEntry?
+
+  @@unique([doctorId, scheduledAt])
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([patientId])
+}
+
+model QueueEntry {
+  id                    String      @id @default(uuid())
+  patientId             String
+  patient               Patient     @relation(fields: [patientId], references: [id])
+  appointmentId         String?     @unique
+  appointment           Appointment? @relation(fields: [appointmentId], references: [id])
+  departmentId          String
+  department            Department  @relation(fields: [departmentId], references: [id])
+  assignedDoctorId      String?
+  assignedDoctor        User?       @relation("QueueAssignedDoctor", fields: [assignedDoctorId], references: [id])
+
+  status                QueueStatus @default(WAITING)
+  isEmergency           Boolean     @default(false)
+  priorityScore         Float?
+  priorityCalculatedAt  DateTime?
+
+  // Phase 11 addition — manual priority override. Genuinely required:
+  // no existing field preserved the distinction between the engine's
+  // calculated priorityScore and a clinician's deliberate override, or
+  // recorded who/when/why. See Phase11 doc, "Database Changes" for the
+  // full justification. priorityScore itself is left untouched by an
+  // override — it keeps meaning "what the engine calculated," while
+  // these four fields capture the override as a separate, explicit fact.
+  manualPriorityOverride Float?
+  manualPriorityReason   String?
+  priorityOverriddenById String?
+  priorityOverriddenBy   User?      @relation("PriorityOverriddenBy", fields: [priorityOverriddenById], references: [id])
+  priorityOverriddenAt   DateTime?
+
+  checkInTime           DateTime    @default(now())
+  calledTime            DateTime?
+  consultationStartTime DateTime?
+  consultationEndTime   DateTime?
+
+  createdAt             DateTime    @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  triage       Triage?
+  consultation Consultation?
+  auditLogs    AuditLog[]
+
+  // NOTE: a partial unique index enforcing "one active queue entry per
+  // patient" (status IN WAITING/CALLED/IN_CONSULTATION) is added via a
+  // hand-written migration — see Phase 2 doc, Section 5. Prisma's schema
+  // language cannot express a conditional unique constraint directly.
+  @@index([status])
+  @@index([departmentId, status])
+  @@index([checkInTime])
+  @@index([priorityScore])
+}
+
+model Triage {
+  id           String     @id @default(uuid())
+  queueEntryId String     @unique
+  queueEntry   QueueEntry @relation(fields: [queueEntryId], references: [id])
+  recordedById String
+  recordedBy   User       @relation("TriageRecordedBy", fields: [recordedById], references: [id])
+
+  temperature      Float?
+  bloodPressureSys Int?
+  bloodPressureDia Int?
+  heartRate        Int?
+  respiratoryRate  Int?
+  oxygenSaturation Int?
+  weightKg         Float?
+  heightCm         Float?
+  bmi              Float? // computed in application code from weightKg/heightCm
+  bloodGlucose     Float?
+  painScore        Int?
+  symptoms         String?
+  notes            String?
+  priorityLevel    TriagePriority
+
+  recordedAt DateTime @default(now())
+
+  @@index([priorityLevel])
+}
+
+model Consultation {
+  id           String     @id @default(uuid())
+  queueEntryId String     @unique
+  queueEntry   QueueEntry @relation(fields: [queueEntryId], references: [id])
+  patientId    String
+  patient      Patient    @relation(fields: [patientId], references: [id])
+  doctorId     String
+  doctor       User       @relation("ConsultationDoctor", fields: [doctorId], references: [id])
+  // departmentId is denormalized from QueueEntry at creation time to make
+  // rolling-average waiting-time queries fast without an extra join; it is
+  // never updated after the consultation closes, so no sync-drift risk.
+  departmentId String
+
+  // Phase 13 addition: `chiefComplaint` and `assessment` are distinct
+  // clinical concepts from what already existed (`clinicalNotes` =
+  // history, `diagnosis` = clinical impression, `treatmentPlan` = plan)
+  // — the brief's Consultation Details/Assessment sections explicitly
+  // call for both as their own fields, and folding them into an
+  // existing free-text field would muddy a permanent clinical record's
+  // meaning rather than clarify it. Both nullable, purely additive.
+  chiefComplaint String?
+  assessment     String?
+  diagnosis      String?
+  clinicalNotes  String?
+  treatmentPlan  String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prescriptions Prescription[]
+
+  @@index([doctorId, completedAt])
+  @@index([departmentId, completedAt])
+  @@index([patientId])
+}
+
+model Medicine {
+  id            String   @id @default(uuid())
+  name          String
+  genericName   String?
+  category      String?
+  dosageForm    String?
+  strength      String?
+  stockQuantity Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  prescriptions Prescription[]
+
+  @@index([name])
+}
+
+model Prescription {
+  id             String       @id @default(uuid())
+  consultationId String
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
+  medicineId     String
+  medicine       Medicine     @relation(fields: [medicineId], references: [id])
+
+  dosage       String
+  frequency    String
+  duration     String
+  route        String?
+  instructions String?
+  quantity     Int
+
+  status        PrescriptionStatus @default(PENDING)
+  dispensedById String?
+  dispensedBy   User?              @relation("PrescriptionDispensedBy", fields: [dispensedById], references: [id])
+  dispensedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([consultationId])
+}
+
+model AuditLog {
+  id           String      @id @default(uuid())
+  userId       String
+  user         User        @relation("AuditUser", fields: [userId], references: [id])
+  action       AuditAction
+  entityType   String
+  entityId     String
+  queueEntryId String?
+  queueEntry   QueueEntry? @relation(fields: [queueEntryId], references: [id])
+
+  previousValue Json?
+  newValue      Json?
+  reason        String?
+  ipAddress     String?
+  description   String?
+
+  createdAt DateTime @default(now())
+
+  @@index([queueEntryId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([entityType, entityId])
+}
+
+model PriorityConfig {
+  id       String  @id @default(uuid())
+  name     String  @unique
+  isActive Boolean @default(false)
+
+  triageWeight               Float @default(10)
+  emergencyBonus              Float @default(1000)
+  waitingTimeWeightPerMinute Float @default(1)
+  appointmentOnTimeBonus      Float @default(20)
+  vulnerabilityBonus          Float @default(15)
+
+  updatedById String?
+  updatedBy   User?   @relation("ConfigUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // NOTE: only one PriorityConfig may have isActive = true at a time. Like
+  // the one-active-queue-entry-per-patient rule, this is a conditional
+  // uniqueness constraint that Prisma's schema language cannot express
+  // directly — enforced via a hand-written partial unique index migration.
+  // See Phase 2 doc, Section 5 (migration 2).
+  @@index([isActive])
+}
+
+// Cached rolling-average service time by department (and optionally doctor),
+// recalculated periodically from Consultation history. Not the source of
+// truth — Consultation.startedAt/completedAt is. Safe to omit in an early
+// build and compute the average live instead; see Phase 2 doc.
+model DepartmentServiceStat {
+  id                    String     @id @default(uuid())
+  departmentId          String
+  department            Department @relation(fields: [departmentId], references: [id])
+  doctorId              String?
+  doctor                User?      @relation("ServiceStatDoctor", fields: [doctorId], references: [id])
+  averageServiceMinutes Float
+  sampleSize            Int
+  updatedAt             DateTime   @updatedAt
+
+  @@unique([departmentId, doctorId])
+}

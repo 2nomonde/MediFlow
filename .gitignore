@@ -1,0 +1,60 @@
+# Recovery and temporary project folders
+/backups/
+/client-phase*-backup/
+/frontend-recovery/
+/auth-redesign-files/
+/phase*-backend-temp/
+/phase*-frontend-temp/
+/phase17-final-temp/
+/temp-appointments-client/
+/temp-appointments-server/
+
+# Old archives and copied repositories
+/.git - Copy/
+/.git - Copy.zip
+/mipqms-nested-src.zip
+/mipqms-original-src.zip
+
+# Workspace files
+/MediFlow.code-workspace/
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+build/
+**/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Prisma
+**/prisma/migrations/dev.db
+
+# Backup and recovery files
+**/_recovery_backup_*/
+**/*.before-route-recovery.tsx
+**/*.before-priority-recovery.bak
+
+# Backend phase backups
+/server/*-backup/
+/server/*-backup-*/
+/server/mipqms-server/mipqms-server-phase*-backup/
+
+# Generated TypeScript and Vite files
+*.tsbuildinfo
+client/**/vite.config.js
+client/**/vite.config.d.ts
